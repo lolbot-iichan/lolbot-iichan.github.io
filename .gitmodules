@@ -1,0 +1,3 @@
+[submodule "chocomilk"]
+	path = chocomilk
+	url = https://github.com/lolbot-iichan/chocomilk.git
