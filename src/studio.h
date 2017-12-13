@@ -141,7 +141,6 @@ bool getGesturePos(SDL_Point* pos);
 const u8* getKeyboard();
 
 void drawToolbar(tic_mem* tic, u8 color, bool bg);
-void drawExtrabar(tic_mem* tic);
 void drawBitIcon(s32 x, s32 y, const u8* ptr, u8 color);
 
 void studioRomLoaded();
@@ -200,3 +199,11 @@ void gotoCode();
 void gotoSurf();
 void exitFromGameMenu();
 void runProject();
+
+tic_tiles* 		getBankTiles();
+tic_tiles* 		getBankSprites();
+tic_map* 		getBankMap();
+tic_sfx* 		getBankSfx();
+tic_music* 		getBankMusic();
+tic_code* 		getBankCode();
+tic_palette* 	getBankPalette();

@@ -31,14 +31,19 @@
 #define PALETTE_HEIGHT (PALETTE_ROWS * PALETTE_CELL_SIZE)
 #define SHEET_COLS (TIC_SPRITESHEET_SIZE / TIC_SPRITESIZE)
 
+static void clearCanvasSelection(Sprite* sprite)
+{
+	SDL_memset(&sprite->select.rect, 0, sizeof(SDL_Rect));
+}
+
 static u8 getSheetPixel(Sprite* sprite, s32 x, s32 y)
 {
-	return getSpritePixel(sprite->tic->cart.bank.tiles.data, x, sprite->index >= TIC_BANK_SPRITES ? y + TIC_SPRITESHEET_SIZE: y);
+	return getSpritePixel(getBankTiles()->data, x, sprite->index >= TIC_BANK_SPRITES ? y + TIC_SPRITESHEET_SIZE: y);
 }
 
 static void setSheetPixel(Sprite* sprite, s32 x, s32 y, u8 color)
 {
-	setSpritePixel(sprite->tic->cart.bank.tiles.data, x, sprite->index >= TIC_BANK_SPRITES ? y + TIC_SPRITESHEET_SIZE: y, color);
+	setSpritePixel(getBankTiles()->data, x, sprite->index >= TIC_BANK_SPRITES ? y + TIC_SPRITESHEET_SIZE: y, color);
 }
 
 static s32 getIndexPosX(Sprite* sprite)
@@ -446,6 +451,24 @@ static void rightCanvas(Sprite* sprite)
 	pasteSelection(sprite);
 }
 
+static void deleteCanvas(Sprite* sprite)
+{
+	SDL_Rect* rect = &sprite->select.rect;
+	
+	s32 left = getIndexPosX(sprite) + rect->x;
+	s32 top = getIndexPosY(sprite) + rect->y;
+	s32 right = left + rect->w;
+	s32 bottom = top + rect->h;
+
+	for(s32 pixel_y = top; pixel_y < bottom; pixel_y++)
+		for(s32 pixel_x = left; pixel_x < right; pixel_x++)
+			setSheetPixel(sprite, pixel_x, pixel_y, sprite->color2);
+
+	clearCanvasSelection(sprite);
+	
+	history_add(sprite->history);
+}
+
 static void drawMoveButtons(Sprite* sprite)
 {
 	if(hasCanvasSelection(sprite))
@@ -502,9 +525,10 @@ static void drawMoveButtons(Sprite* sprite)
 
 		static void(* const Func[])(Sprite*) = {upCanvas, downCanvas, leftCanvas, rightCanvas};
 
+		bool down = false;
 		for(s32 i = 0; i < sizeof Icons / 8; i++)
 		{
-			bool down = false;
+			down = false;
 
 			if(checkMousePos(&Rects[i]))
 			{
@@ -648,8 +672,8 @@ static void drawRGBSlider(Sprite* sprite, s32 x, s32 y, u8* value)
 
 static void pasteColor(Sprite* sprite)
 {
-	fromClipboard(sprite->tic->cart.palette.data, sizeof(tic_palette), false, true);
-	fromClipboard(&sprite->tic->cart.palette.colors[sprite->color], sizeof(tic_rgb), false, true);
+	fromClipboard(getBankPalette()->data, sizeof(tic_palette), false, true);
+	fromClipboard(&getBankPalette()->colors[sprite->color], sizeof(tic_rgb), false, true);
 }
 
 static void drawRGBTools(Sprite* sprite, s32 x, s32 y)
@@ -684,7 +708,7 @@ static void drawRGBTools(Sprite* sprite, s32 x, s32 y)
 				down = true;
 
 			if(checkMouseClick(&rect, SDL_BUTTON_LEFT))
-				toClipboard(sprite->tic->cart.palette.data, sizeof(tic_palette), false);
+				toClipboard(getBankPalette()->data, sizeof(tic_palette), false);
 		}
 
 		if(down)
@@ -748,7 +772,7 @@ static void drawRGBSliders(Sprite* sprite, s32 x, s32 y)
 {
 	enum{Gap = 6, Count = sizeof(tic_rgb)};
 
-	u8* data = &sprite->tic->cart.palette.data[sprite->color * Count];
+	u8* data = &getBankPalette()->data[sprite->color * Count];
 
 	for(s32 i = 0; i < Count; i++)
 		drawRGBSlider(sprite, x, y + Gap*i, &data[i]);
@@ -760,7 +784,7 @@ static void drawRGBSlidersOvr(Sprite* sprite, s32 x, s32 y)
 {
 	enum{Gap = 6, Count = sizeof(tic_rgb), Size = CANVAS_SIZE, Max = 255};
 
-	u8* data = &sprite->tic->cart.palette.data[sprite->color * Count];
+	u8* data = &getBankPalette()->data[sprite->color * Count];
 
 	for(s32 i = 0; i < Count; i++)
 	{
@@ -882,11 +906,6 @@ static void drawPaletteOvr(Sprite* sprite, s32 x, s32 y)
 	}
 }
 
-static void clearCanvasSelection(Sprite* sprite)
-{
-	SDL_memset(&sprite->select.rect, 0, sizeof(SDL_Rect));
-}
-
 static void selectSprite(Sprite* sprite, s32 x, s32 y)
 {
 	{
@@ -940,7 +959,7 @@ static void drawSheetOvr(Sprite* sprite, s32 x, s32 y)
 
 	for(s32 j = 0, index = (sprite->index - sprite->index % TIC_BANK_SPRITES); j < rect.h; j += TIC_SPRITESIZE)
 		for(s32 i = 0; i < rect.w; i += TIC_SPRITESIZE, index++)
-			sprite->tic->api.sprite(sprite->tic, &sprite->tic->cart.bank.tiles, index, x + i, y + j, NULL, 0);
+			sprite->tic->api.sprite(sprite->tic, getBankTiles(), index, x + i, y + j, NULL, 0);
 	{
 		s32 bx = getIndexPosX(sprite) + x - 1;
 		s32 by = getIndexPosY(sprite) + y - 1;
@@ -1067,22 +1086,22 @@ static void drawSpriteTools(Sprite* sprite, s32 x, s32 y)
 		0b00111110,
 		0b00000000,
 	};
+	static const char* Tooltips[] = {"FLIP HORZ [5]", "FLIP VERT [6]", "ROTATE [7]", "ERASE [8]"};
 
 	enum{Gap = TIC_SPRITESIZE + 3};
 
 	for(s32 i = 0; i < COUNT_OF(Icons)/BITS_IN_BYTE; i++)
 	{
-		SDL_Rect rect = {x + i * Gap, y, TIC_SPRITESIZE, TIC_SPRITESIZE};
-
 		bool pushed = false;
 		bool over = false;
+		
+		SDL_Rect rect = {x + i * Gap, y, TIC_SPRITESIZE, TIC_SPRITESIZE};
+
 		if(checkMousePos(&rect))
 		{
 			setCursor(SDL_SYSTEM_CURSOR_HAND);
 
 			over = true;
-
-			static const char* Tooltips[] = {"FLIP HORZ [5]", "FLIP VERT [6]", "ROTATE [7]", "ERASE [8]"};
 
 			showTooltip(Tooltips[i]);
 
@@ -1327,7 +1346,7 @@ static void processKeydown(Sprite* sprite, SDL_Keycode keycode)
 			case SDLK_DOWN: 	downCanvas(sprite); break;
 			case SDLK_LEFT: 	leftCanvas(sprite); break;
 			case SDLK_RIGHT: 	rightCanvas(sprite); break;
-			case SDLK_DELETE:	deleteSprite(sprite); break;
+			case SDLK_DELETE:	deleteCanvas(sprite); break;
 			}
 		}
 		else
