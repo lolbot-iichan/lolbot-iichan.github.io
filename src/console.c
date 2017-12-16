@@ -535,12 +535,12 @@ static bool hasExt(const char* name, const char* ext)
 
 static bool hasProjectExt(const char* name)
 {
-	return hasExt(name, PROJECT_LUA_EXT) || hasExt(name, PROJECT_MOON_EXT) || hasExt(name, PROJECT_JS_EXT);
+	return hasExt(name, PROJECT_LUA_EXT) || hasExt(name, PROJECT_MOON_EXT) || hasExt(name, PROJECT_JS_EXT) || hasExt(name, PROJECT_BF_EXT);
 }
 
 static const char* projectComment(const char* name)
 {
-	return hasExt(name, PROJECT_JS_EXT) ? "//" : "--";
+	return hasExt(name, PROJECT_JS_EXT) ? "//" : hasExt(name, PROJECT_BF_EXT) ? "#" : "--";
 }
 
 static void buf2str(const void* data, s32 size, char* ptr, bool flip)
@@ -937,6 +937,9 @@ static void onConsoleLoadCommandConfirmed(Console* console, const char* param)
 
 			if(!fsExistsFile(console->fs, name))
 				name = getName(param, PROJECT_JS_EXT);
+
+			if(!fsExistsFile(console->fs, name))
+				name = getName(param, PROJECT_BF_EXT);
 
 			void* data = fsLoadFile(console->fs, name, &size);
 
