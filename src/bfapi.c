@@ -779,7 +779,7 @@ static s32 bf_sfx(bf_State* bf)
 		{
 			if (index >= 0)
 			{
-				tic_sound_effect* effect = memory->ram.sfx.data + index;
+				tic_sample* effect = memory->ram.sfx.samples.data + index;
 
 				note = effect->note;
 				octave = effect->octave;
@@ -831,12 +831,35 @@ static s32 bf_sync(bf_State* bf)
 {
 	tic_mem* memory = (tic_mem*)getBfMachine(bf);
 
-	bool toCart = true;
-	
-	if(bf_gettop(bf) >= 1)
-		toCart = bf_toboolean(bf, 1);
+	bool toCart = false;
+	s32 section = 0;
+	s32 bank = 0;
 
-	memory->api.sync(memory, toCart);
+	if(bf_gettop(bf) >= 1)
+	{
+        section = getBfNumber(bf, 1);
+
+		if(bf_gettop(bf) >= 2)
+		{
+			bank = getBfNumber(bf, 2);
+
+			if(bf_gettop(bf) >= 3)
+			{
+				toCart = bf_toboolean(bf, 3);
+			}
+		}
+	}
+
+	if(bank >= 0 && bank < TIC_BANKS)
+	{
+	    const char* sections[] = {NULL,"tiles","sprites","map","sfx","music","palette"};
+        if(section >= 0 && section < COUNT_OF(sections))
+    		memory->api.sync(memory, sections[section], bank, toCart);
+    	else
+		    bfL_error(bf, "sync() error, invalid section");
+	}
+	else
+		bfL_error(bf, "sync() error, invalid bank");
 
 	return 0;
 }
@@ -1034,7 +1057,7 @@ static s32 bf_pmem(bf_State *bf)
 	{
 		u32 index = getBfNumber(bf, 1);
 
-		if(index >= 0 && index < TIC_PERSISTENT_SIZE)
+		if(index < TIC_PERSISTENT_SIZE)
 		{
 			s32 val = memory->ram.persistent.data[index];
 

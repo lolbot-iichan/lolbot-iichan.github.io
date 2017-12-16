@@ -290,7 +290,7 @@ static s32 writeGifData(const tic_mem* tic, u8* dst, const u8* src, s32 width, s
 
 	if(palette)
 	{
-		const tic_rgb* pal = tic->cart.bank.palette.colors;
+		const tic_rgb* pal = tic->cart.palette.colors;
 		for(s32 i = 0; i < TIC_PALETTE_SIZE; i++, pal++)
 			palette[i].r = pal->r, palette[i].g = pal->g, palette[i].b = pal->b;
 
@@ -304,10 +304,10 @@ static s32 writeGifData(const tic_mem* tic, u8* dst, const u8* src, s32 width, s
 
 static void loadCart(tic_mem* tic, tic_cartridge* cart, const u8* buffer, s32 size, bool palette)
 {
-	tic->api.load(cart, sizeof(tic_cartridge), buffer, size, palette);
+	tic->api.load(cart, buffer, size, palette);
 
 	if(!palette)
-		memcpy(cart->bank.palette.data, tic->config.palette.data, sizeof(tic_palette));
+		memcpy(cart->palette.data, tic->config.palette.data, sizeof(tic_palette));
 }
 
 static bool loadRom(tic_mem* tic, const void* data, s32 size, bool palette)
@@ -361,12 +361,12 @@ static bool onConsoleLoadSectionCommand(Console* console, const char* param)
 						switch(i)
 						{
 						case 0: memcpy(&tic->cart.cover, 		&cart->cover, 			sizeof cart->cover); break;
-						case 1: memcpy(&tic->cart.bank.tiles, 	&cart->bank.tiles, 		sizeof(tic_tiles)*2); break;
-						case 2: memcpy(&tic->cart.bank.map, 	&cart->bank.map, 		sizeof(tic_map)); break;
-						case 3: memcpy(&tic->cart.bank.code, 	&cart->bank.code, 		sizeof(tic_code)); break;
-						case 4: memcpy(&tic->cart.bank.sfx, 	&cart->bank.sfx, 		sizeof(tic_sfx)); break;
-						case 5: memcpy(&tic->cart.bank.music, 	&cart->bank.music, 		sizeof(tic_music)); break;
-						case 6: memcpy(&tic->cart.bank.palette, &cart->bank.palette, 	sizeof(tic_palette)); break;
+						case 1: memcpy(&tic->cart.bank0.tiles, 	&cart->bank0.tiles, 	sizeof(tic_tiles)*2); break;
+						case 2: memcpy(&tic->cart.bank0.map, 	&cart->bank0.map, 		sizeof(tic_map)); break;
+						case 3: memcpy(&tic->cart.bank0.code, 	&cart->bank0.code, 		sizeof(tic_code)); break;
+						case 4: memcpy(&tic->cart.bank0.sfx, 	&cart->bank0.sfx, 		sizeof(tic_sfx)); break;
+						case 5: memcpy(&tic->cart.bank0.music, 	&cart->bank0.music, 	sizeof(tic_music)); break;
+						case 6: memcpy(&tic->cart.palette, 		&cart->palette,			sizeof(tic_palette)); break;
 						}
 
 						studioRomLoaded();
@@ -580,6 +580,22 @@ static char* saveTextSection(char* ptr, const char* data)
 	return ptr;
 }
 
+static char* saveTextSectionBank(char* ptr, const char* comment, const char* tag, const char* data)
+{
+	if(strlen(data) == 0)
+		return ptr;
+
+	sprintf(ptr, "%s <%s>\n", comment, tag);
+	ptr += strlen(ptr);
+
+	ptr = saveTextSection(ptr, data);
+
+	sprintf(ptr, "%s </%s>\n\n", comment, tag);
+	ptr += strlen(ptr);
+
+	return ptr;
+}
+
 static char* saveBinaryBuffer(char* ptr, const char* comment, const void* data, s32 size, s32 row, bool flip)
 {
 	if(bufferEmpty(data, size)) 
@@ -614,38 +630,58 @@ static char* saveBinarySection(char* ptr, const char* comment, const char* tag, 
 	return ptr;
 }
 
-typedef struct {char* tag; s32 count; s32 offset; s32 size; bool flip;} BinarySection;
+typedef struct {char* tag; s32 count; s32 offset; s32 size;} BinarySection;
 static const BinarySection BinarySections[] = 
 {
-	{"PALETTE", 	1, 					offsetof(tic_cartridge, bank.palette.data), 			sizeof(tic_palette), false},
-	{"TILES", 		TIC_BANK_SPRITES, 	offsetof(tic_cartridge, bank.tiles), 			sizeof(tic_tile), true},
-	{"SPRITES", 	TIC_BANK_SPRITES, 	offsetof(tic_cartridge, bank.sprites), 			sizeof(tic_tile), true},
-	{"MAP", 		TIC_MAP_HEIGHT, 	offsetof(tic_cartridge, bank.map), 				TIC_MAP_WIDTH, true},
-	{"WAVES", 		ENVELOPES_COUNT, 	offsetof(tic_cartridge, bank.sfx.waveform.envelopes), sizeof(tic_waveform), true},
-	{"SFX", 		SFX_COUNT, 			offsetof(tic_cartridge, bank.sfx.data), 		sizeof(tic_sound_effect), true},
-	{"PATTERNS", 	MUSIC_PATTERNS, 	offsetof(tic_cartridge, bank.music.patterns), 	sizeof(tic_track_pattern), true},
-	{"TRACKS", 		MUSIC_TRACKS, 		offsetof(tic_cartridge, bank.music.tracks), 	sizeof(tic_track), true},
+	{"TILES", 		TIC_BANK_SPRITES, 	offsetof(tic_bank, tiles), 			sizeof(tic_tile)},
+	{"SPRITES", 	TIC_BANK_SPRITES, 	offsetof(tic_bank, sprites), 		sizeof(tic_tile)},
+	{"MAP", 		TIC_MAP_HEIGHT, 	offsetof(tic_bank, map), 			TIC_MAP_WIDTH},
+	{"WAVES", 		ENVELOPES_COUNT, 	offsetof(tic_bank, sfx.waveform), 	sizeof(tic_waveform)},
+	{"SFX", 		SFX_COUNT, 			offsetof(tic_bank, sfx.samples), 	sizeof(tic_sample)},
+	{"PATTERNS", 	MUSIC_PATTERNS, 	offsetof(tic_bank, music.patterns), sizeof(tic_track_pattern)},
+	{"TRACKS", 		MUSIC_TRACKS, 		offsetof(tic_bank, music.tracks), 	sizeof(tic_track)},
 };
+
+static void makeTag(const char* tag, char* out, s32 bank)
+{
+	if(bank) sprintf(out, "%s%i", tag, bank);
+	else strcpy(out, tag);
+}
 
 static s32 saveProject(Console* console, void* buffer, const char* comment)
 {
 	tic_mem* tic = console->tic;
 
 	char* stream = buffer;
-	char* ptr = saveTextSection(stream, tic->cart.bank.code.data);
+	char* ptr = saveTextSection(stream, tic->cart.bank0.code.data);
+	char tag[16];
+
+	for(s32 b = 1; b < TIC_BANKS; b++)
+	{
+		makeTag("CODE", tag, b);
+		ptr = saveTextSectionBank(ptr, comment, tag, tic->cart.banks[b].code.data);
+	}
 
 	for(s32 i = 0; i < COUNT_OF(BinarySections); i++)
 	{
 		const BinarySection* section = &BinarySections[i];
-		ptr = saveBinarySection(ptr, comment, section->tag, section->count, (u8*)&tic->cart + section->offset, section->size, section->flip);
-	}
 
-	saveBinarySection(ptr, comment, "COVER", 1, &tic->cart.cover, tic->cart.cover.size + sizeof(s32), true);
+		for(s32 b = 0; b < TIC_BANKS; b++)
+		{
+			makeTag(section->tag, tag, b);
+
+			ptr = saveBinarySection(ptr, comment, tag, section->count, 
+				(u8*)&tic->cart.banks[b] + section->offset, section->size, true);
+		}
+	}		
+
+	ptr = saveBinarySection(ptr, comment, "PALETTE", 1, &tic->cart.palette, sizeof(tic_palette), false);
+	ptr = saveBinarySection(ptr, comment, "COVER", 1, &tic->cart.cover, tic->cart.cover.size + sizeof(s32), true);
 
 	return strlen(stream);
 }
 
-static bool loadTextSection(const char* project, const char* comment, void* dst, s32 size)
+static bool loadTextSection(const char* project, const char* comment, char* dst, s32 size)
 {
 	bool done = false;
 
@@ -654,22 +690,63 @@ static bool loadTextSection(const char* project, const char* comment, void* dst,
 
 	{
 		char tagbuf[64];
+		char tag[16];
 
 		for(s32 i = 0; i < COUNT_OF(BinarySections); i++)
 		{
-			sprintf(tagbuf, "\n%s <%s>\n", comment, BinarySections[i].tag);
+			for(s32 b = 0; b < TIC_BANKS; b++)
+			{
+				makeTag(BinarySections[i].tag, tag, b);
+
+				sprintf(tagbuf, "\n%s <%s>\n", comment, tag);
+
+				const char* ptr = SDL_strstr(project, tagbuf);
+
+				if(ptr && ptr < end)
+					end = ptr;
+			}
+		}
+
+		{
+			sprintf(tagbuf, "\n%s <PALETTE>\n", comment);
 
 			const char* ptr = SDL_strstr(project, tagbuf);
 
 			if(ptr && ptr < end)
 				end = ptr;
-		}		
+		}
 	}
 
 	if(end > start)
 	{
 		SDL_memcpy(dst, start, SDL_min(size, end - start));
 		done = true;
+	}
+
+	return done;
+}
+
+static bool loadTextSectionBank(const char* project, const char* comment, const char* tag, char* dst, s32 size)
+{
+	char tagbuf[64];
+	sprintf(tagbuf, "%s <%s>\n", comment, tag);
+
+	const char* start = SDL_strstr(project, tagbuf);
+	bool done = false;
+
+	if(start)
+	{
+		start += strlen(tagbuf);
+
+		sprintf(tagbuf, "\n%s </%s>", comment, tag);
+		const char* end = SDL_strstr(start, tagbuf);
+
+		if(end > start)
+		{
+			SDL_memcpy(dst, start, SDL_min(size, end - start));
+			
+			done = true;
+		}
 	}
 
 	return done;
@@ -749,19 +826,37 @@ static bool loadProject(Console* console, const char* name, const char* data, s3
 		if(cart)
 		{
 			SDL_memset(cart, 0, sizeof(tic_cartridge));
-			SDL_memcpy(&cart->bank.palette, &tic->config.palette.data, sizeof(tic_palette));
+			SDL_memcpy(&cart->palette, &tic->config.palette.data, sizeof(tic_palette));
 
 			const char* comment = projectComment(name);
+			char tag[16];
 
-			if(loadTextSection(project, comment, cart->bank.code.data, sizeof(tic_code)))
+			if(loadTextSection(project, comment, cart->bank0.code.data, sizeof(tic_code)))
 				done = true;
+
+			for(s32 b = 1; b < TIC_BANKS; b++)
+			{
+				makeTag("CODE", tag, b);
+
+				if(loadTextSectionBank(project, comment, tag, cart->banks[b].code.data, sizeof(tic_code)))
+					done = true;
+			}
 
 			for(s32 i = 0; i < COUNT_OF(BinarySections); i++)
 			{
 				const BinarySection* section = &BinarySections[i];
-				if(loadBinarySection(project, comment, section->tag, section->count, (u8*)cart + section->offset, section->size, section->flip))
-					done = true;
+
+				for(s32 b = 0; b < TIC_BANKS; b++)
+				{
+					makeTag(section->tag, tag, b);
+
+					if(loadBinarySection(project, comment, tag, section->count, (u8*)&cart->banks[b] + section->offset, section->size, true))
+						done = true;
+				}
 			}
+
+			if(loadBinarySection(project, comment, "PALETTE", 1, &cart->palette, sizeof(tic_palette), false))
+				done = true;
 
 			if(loadBinarySection(project, comment, "COVER", 1, &cart->cover, -1, true))
 				done = true;
@@ -1349,9 +1444,9 @@ static void onImportSprites(const char* name, const void* buffer, size_t size, v
 						u8 src = image->buffer[x + y * image->width];
 						const gif_color* c = &image->palette[src];
 						tic_rgb rgb = {c->r, c->g, c->b};
-						u8 color = tic_tool_find_closest_color(console->tic->cart.bank.palette.colors, &rgb);
+						u8 color = tic_tool_find_closest_color(console->tic->cart.palette.colors, &rgb);
 
-						setSpritePixel(console->tic->cart.bank.tiles.data, x, y, color);
+						setSpritePixel(getBankTiles()->data, x, y, color);
 					}
 
 				gif_close(image);
@@ -1373,8 +1468,8 @@ static void injectMap(Console* console, const void* buffer, s32 size)
 {
 	enum {Size = sizeof(tic_map)};
 
-	SDL_memset(&console->tic->cart.bank.map, 0, Size);
-	SDL_memcpy(&console->tic->cart.bank.map, buffer, SDL_min(size, Size));
+	SDL_memset(getBankMap(), 0, Size);
+	SDL_memcpy(getBankMap(), buffer, SDL_min(size, Size));
 }
 
 static void onImportMap(const char* name, const void* buffer, size_t size, void* data)
@@ -1474,7 +1569,7 @@ static void exportSprites(Console* console)
 		{
 			for (s32 y = 0; y < Height; y++)
 				for (s32 x = 0; x < Width; x++)
-					data[x + y * Width] = getSpritePixel(console->tic->cart.bank.tiles.data, x, y);
+					data[x + y * Width] = getSpritePixel(getBankTiles()->data, x, y);
 
 			s32 size = 0;
 			if((size = writeGifData(console->tic, buffer, data, Width, Height)))
@@ -1514,7 +1609,7 @@ static void exportMap(Console* console)
 
 	if(buffer)
 	{
-		SDL_memcpy(buffer, console->tic->cart.bank.map.data, Size);
+		SDL_memcpy(buffer, getBankMap()->data, Size);
 		fsGetFileData(onMapExported, "world.map", buffer, Size, DEFAULT_CHMOD, console);
 	}
 }
@@ -1999,7 +2094,7 @@ static void onConsoleResumeCommand(Console* console, const char* param)
 	commandDone(console);
 
 	console->tic->api.resume(console->tic);
-	console->tic->api.sync(console->tic, false);
+	console->tic->api.sync(console->tic, NULL, 0, false);
 
 	setStudioMode(TIC_RUN_MODE);
 }
@@ -2164,7 +2259,7 @@ static void onConsoleRamCommand(Console* console, const char* param)
 		{offsetof(tic_ram, persistent), 				"PERSISTENT MEMORY"},
 		{offsetof(tic_ram, registers), 					"SOUND REGISTERS"},
 		{offsetof(tic_ram, sfx.waveform), 				"WAVEFORMS"},
-		{offsetof(tic_ram, sfx.data), 					"SFX"},
+		{offsetof(tic_ram, sfx.samples),				"SFX"},
 		{offsetof(tic_ram, music.patterns.data), 		"MUSIC PATTERNS"},
 		{offsetof(tic_ram, music.tracks.data), 			"MUSIC TRACKS"},
 		{offsetof(tic_ram, music_pos), 					"MUSIC POS"},
@@ -2735,7 +2830,7 @@ static bool cmdInjectCode(Console* console, const char* param, const char* name)
 	bool watch = strcmp(param, "-code-watch") == 0;
 	if(watch || strcmp(param, "-code") == 0)
 	{
-		bool loaded = loadFileIntoBuffer(console, console->embed.file->bank.code.data, name);
+		bool loaded = loadFileIntoBuffer(console, console->embed.file->bank0.code.data, name);
 
 		if(loaded)
 		{
@@ -2784,9 +2879,9 @@ static bool cmdInjectSprites(Console* console, const char* param, const char* na
 						u8 src = image->buffer[x + y * image->width];
 						const gif_color* c = &image->palette[src];
 						tic_rgb rgb = {c->r, c->g, c->b};
-						u8 color = tic_tool_find_closest_color(console->embed.file->bank.palette.colors, &rgb);
+						u8 color = tic_tool_find_closest_color(console->embed.file->palette.colors, &rgb);
 
-						setSpritePixel(console->embed.file->bank.tiles.data, x, y, color);
+						setSpritePixel(console->embed.file->bank0.tiles.data, x, y, color);
 					}
 
 				gif_close(image);
@@ -2907,7 +3002,7 @@ void initConsole(Console* console, tic_mem* tic, FileSystem* fs, Config* config,
 
 	if(argc > 1)
 	{
-		memcpy(console->embed.file->bank.palette.data, tic->config.palette.data, sizeof(tic_palette));
+		memcpy(console->embed.file->palette.data, tic->config.palette.data, sizeof(tic_palette));
 
 		u32 argp = 1;
 

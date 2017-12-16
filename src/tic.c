@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <ctype.h>
+#include <stddef.h>
 
 #include "ticapi.h"
 #include "tools.h"
@@ -52,7 +53,7 @@ typedef enum
 	CHUNK_TEMP,		// 6
 	CHUNK_TEMP2, 	// 7
 	CHUNK_TEMP3,	// 8
-	CHUNK_SOUND,	// 9
+	CHUNK_SAMPLES,	// 9
 	CHUNK_WAVEFORM,	// 10
 	CHUNK_TEMP4,	// 11
 	CHUNK_PALETTE, 	// 12
@@ -63,13 +64,16 @@ typedef enum
 
 typedef struct
 {
-	ChunkType type:8;
-	u32 size:24;
+	ChunkType type:5;
+	u32 bank:TIC_BANK_BITS;
+	u32 size:16; // max chunk size is 64K
+	u32 temp:8;
 } Chunk;
 
-STATIC_ASSERT(rom_chunk_size, sizeof(Chunk) == 4);
+STATIC_ASSERT(tic_bank_bits, TIC_BANK_BITS == 3);
+STATIC_ASSERT(tic_chunk_size, sizeof(Chunk) == 4);
 STATIC_ASSERT(tic_map, sizeof(tic_map) < 1024*32);
-STATIC_ASSERT(tic_sound_effect, sizeof(tic_sound_effect) == 66);
+STATIC_ASSERT(tic_sample, sizeof(tic_sample) == 66);
 STATIC_ASSERT(tic_track_pattern, sizeof(tic_track_pattern) == 3*MUSIC_PATTERN_ROWS);
 STATIC_ASSERT(tic_track, sizeof(tic_track) == 3*MUSIC_FRAMES+3);
 STATIC_ASSERT(tic_vram, sizeof(tic_vram) == TIC_VRAM_SIZE);
@@ -144,7 +148,7 @@ static void runNoise(blip_buffer_t* blip, tic_sound_register* reg, tic_sound_reg
 static void resetPalette(tic_mem* memory)
 {
 	static const u8 DefaultMapping[] = {16, 50, 84, 118, 152, 186, 220, 254};
-	memcpy(memory->ram.vram.palette.data, memory->cart.bank.palette.data, sizeof(tic_palette));
+	memcpy(memory->ram.vram.palette.data, memory->cart.palette.data, sizeof(tic_palette));
 	memcpy(memory->ram.vram.mapping, DefaultMapping, sizeof DefaultMapping);
 }
 
@@ -356,7 +360,7 @@ static void channelSfx(tic_mem* memory, s32 index, s32 note, s32 octave, s32 dur
 	if(index >= 0)
 	{
 		struct {s8 speed:SFX_SPEED_BITS;} temp = {speed};
-		c->speed = speed == temp.speed ? speed : machine->sound.sfx->data[index].speed;
+		c->speed = speed == temp.speed ? speed : machine->sound.sfx->samples.data[index].speed;
 	}
 
 	// start index of idealized piano
@@ -1061,7 +1065,7 @@ static void sfx(tic_mem* memory, s32 index, s32 freq, Channel* channel, tic_soun
 		return;
 	}
 
-	const tic_sound_effect* effect = &machine->sound.sfx->data[index];
+	const tic_sample* effect = &machine->sound.sfx->samples.data[index];
 	s32 pos = ++channel->tick;
 
 	s8 speed = channel->speed;
@@ -1230,6 +1234,7 @@ static void api_tick_start(tic_mem* memory, const tic_sfx* sfxsrc, const tic_mus
 
 	machine->state.setpix = setPixelDma;
 	machine->state.getpix = getPixelDma;
+	machine->state.synced = false;
 }
 
 static void api_tick_end(tic_mem* memory)
@@ -1256,7 +1261,7 @@ static void api_tick_end(tic_mem* memory)
 
 	machine->state.setpix = setPixelOvr;
 	machine->state.getpix = getPixelOvr;
-	memcpy(machine->state.ovr.palette, tic_palette_blit(&memory->cart.bank.palette), sizeof machine->state.ovr.palette);
+	memcpy(machine->state.ovr.palette, tic_palette_blit(&memory->cart.palette), sizeof machine->state.ovr.palette);
 }
 
 
@@ -1313,7 +1318,7 @@ static void initCover(tic_mem* tic)
 				{
 					const gif_color* c = &image->palette[image->buffer[i]];
 					tic_rgb rgb = { c->r, c->g, c->b };
-					u8 color = tic_tool_find_closest_color(tic->cart.bank.palette.colors, &rgb);
+					u8 color = tic_tool_find_closest_color(tic->cart.palette.colors, &rgb);
 					tic_tool_poke4(tic->ram.vram.screen.data, i, color);
 				}
 			}
@@ -1323,29 +1328,43 @@ static void initCover(tic_mem* tic)
 	}
 }
 
-static void api_sync(tic_mem* tic, bool toCart)
+static void api_sync(tic_mem* tic, const char* section, s32 bank, bool toCart)
 {
-	if(toCart)
+	tic_machine* machine = (tic_machine*)tic;
+	
+	if(machine->state.synced)
+		return;
+
+	static const struct {const char* name; s32 bank; s32 ram; s32 size;} Sections[] = 
 	{
-		memcpy(&tic->cart.bank.tiles, 	&tic->ram.tiles, 	sizeof(tic_tiles));
-		memcpy(&tic->cart.bank.sprites, &tic->ram.sprites, 	sizeof(tic_tiles));
-		memcpy(&tic->cart.bank.map, 	&tic->ram.map, 		sizeof(tic_map));
-		memcpy(&tic->cart.bank.sfx, 	&tic->ram.sfx, 		sizeof(tic_sfx));
-		memcpy(&tic->cart.bank.music, 	&tic->ram.music, 	sizeof(tic_music));
-	}
-	else
+		{"tiles", 	offsetof(tic_bank, tiles), 		offsetof(tic_ram, tiles), 	sizeof(tic_tiles)},
+		{"sprites", offsetof(tic_bank, sprites),	offsetof(tic_ram, sprites), sizeof(tic_tiles)},
+		{"map", 	offsetof(tic_bank, map), 		offsetof(tic_ram, map), 	sizeof(tic_map)},
+		{"sfx", 	offsetof(tic_bank, sfx), 		offsetof(tic_ram, sfx), 	sizeof(tic_sfx)},
+		{"music", 	offsetof(tic_bank, music), 		offsetof(tic_ram, music), 	sizeof(tic_music)},
+	};
+
+	assert(bank >= 0 && bank < TIC_BANKS);
+
+	for(s32 i = 0; i < COUNT_OF(Sections); i++)
 	{
-		memcpy(&tic->ram.tiles, 	&tic->cart.bank.tiles, 		sizeof(tic_tiles));
-		memcpy(&tic->ram.sprites, 	&tic->cart.bank.sprites, 	sizeof(tic_tiles));
-		memcpy(&tic->ram.map, 		&tic->cart.bank.map, 		sizeof(tic_map));
-		memcpy(&tic->ram.sfx, 		&tic->cart.bank.sfx, 		sizeof(tic_sfx));
-		memcpy(&tic->ram.music, 	&tic->cart.bank.music, 		sizeof(tic_music));
+		if(section == NULL || (section && strcmp(section, Sections[i].name) == 0))
+			toCart
+				? memcpy((u8*)&tic->cart.banks[bank] + Sections[i].bank, (u8*)&tic->ram + Sections[i].ram, Sections[i].size)
+				: memcpy((u8*)&tic->ram + Sections[i].ram, (u8*)&tic->cart.banks[bank] + Sections[i].bank, Sections[i].size);
 	}
+
+	if(section == NULL || (section && strcmp(section, "pal") == 0))
+		toCart
+			? memcpy(&tic->cart.palette, &tic->ram.vram.palette, sizeof(tic_palette))
+			: memcpy(&tic->ram.vram.palette, &tic->cart.palette, sizeof(tic_palette));
+
+	machine->state.synced = true;
 }
 
 static void cart2ram(tic_mem* memory)
 {
-	api_sync(memory, false);
+	api_sync(memory, NULL, 0, false);
 
 	initCover(memory);
 }
@@ -1430,9 +1449,9 @@ static bool isBrainfuck(const char* code)
 
 static tic_script_lang api_get_script(tic_mem* memory)
 {
-	if(isMoonscript(memory->cart.bank.code.data)) return tic_script_moon;
-	if(isJavascript(memory->cart.bank.code.data)) return tic_script_js;
-	if(isBrainfuck(memory->cart.bank.code.data)) return tic_script_bf;
+	if(isMoonscript(memory->cart.bank0.code.data)) return tic_script_moon;
+	if(isJavascript(memory->cart.bank0.code.data)) return tic_script_js;
+	if(isBrainfuck(memory->cart.bank0.code.data)) return tic_script_bf;
 	return tic_script_lua;
 }
 
@@ -1441,7 +1460,7 @@ static void updateSaveid(tic_mem* memory)
 	memset(memory->saveid, 0, sizeof memory->saveid);
 	for(int i = 0; i < COUNT_OF(TagFormats); i++)
 	{
-		const char* saveid = readMetatag(memory->cart.bank.code.data, "saveid", TagFormats[i]);
+		const char* saveid = readMetatag(memory->cart.bank0.code.data, "saveid", TagFormats[i]);
 		if(saveid)
 		{
 			strcpy(memory->saveid, saveid);
@@ -1459,12 +1478,20 @@ static void api_tick(tic_mem* memory, tic_tick_data* data)
 	
 	if(!machine->state.initialized)
 	{
-
-		char* code = malloc(sizeof(tic_code));
+		enum{CodeSize = sizeof(tic_code) * TIC_BANKS};
+		char* code = malloc(CodeSize);
 
 		if(code)
 		{
-			memcpy(code, machine->memory.cart.bank.code.data, sizeof(tic_code));
+			memset(code, 0, CodeSize);
+
+			for(s32 i = TIC_BANKS - 1; i >= 0; i--)
+			{
+				const char* bankCode = memory->cart.banks[i].code.data;
+
+				if(strlen(bankCode))
+					strcat(code, bankCode);
+			}
 
 			if(data->preprocessor)
 				data->preprocessor(data->data, code);
@@ -1572,15 +1599,15 @@ static u32 api_btnp(tic_mem* tic, s32 index, s32 hold, s32 period)
 	return ((~previous.data) & machine->memory.ram.vram.input.gamepad.data) & (1 << index);
 }
 
-static void api_load(tic_cartridge* cart, s32 cartSize, const u8* buffer, s32 size, bool palette)
+static void api_load(tic_cartridge* cart, const u8* buffer, s32 size, bool palette)
 {
 	const u8* end = buffer + size;
-	memset(cart, 0, cartSize);
+	memset(cart, 0, sizeof(tic_cartridge));
 
 	if(palette)
 	{
 		static const u8 DB16[] = {0x14, 0x0c, 0x1c, 0x44, 0x24, 0x34, 0x30, 0x34, 0x6d, 0x4e, 0x4a, 0x4e, 0x85, 0x4c, 0x30, 0x34, 0x65, 0x24, 0xd0, 0x46, 0x48, 0x75, 0x71, 0x61, 0x59, 0x7d, 0xce, 0xd2, 0x7d, 0x2c, 0x85, 0x95, 0xa1, 0x6d, 0xaa, 0x2c, 0xd2, 0xaa, 0x99, 0x6d, 0xc2, 0xca, 0xda, 0xd4, 0x5e, 0xde, 0xee, 0xd6};
-		memcpy(cart->bank.palette.data, DB16, sizeof(tic_palette));				
+		memcpy(cart->palette.data, DB16, sizeof(tic_palette));				
 	}
 
 	#define LOAD_CHUNK(to) memcpy(&to, buffer, min(sizeof(to), chunk.size))
@@ -1593,17 +1620,17 @@ static void api_load(tic_cartridge* cart, s32 cartSize, const u8* buffer, s32 si
 
 		switch(chunk.type)
 		{
-		case CHUNK_TILES: 		LOAD_CHUNK(cart->bank.tiles); 					break;
-		case CHUNK_SPRITES: 	LOAD_CHUNK(cart->bank.sprites); 				break;
-		case CHUNK_MAP: 		LOAD_CHUNK(cart->bank.map); 					break;
-		case CHUNK_CODE: 		LOAD_CHUNK(cart->bank.code); 							break;
-		case CHUNK_SOUND: 		LOAD_CHUNK(cart->bank.sfx.data); 				break;
-		case CHUNK_WAVEFORM:	LOAD_CHUNK(cart->bank.sfx.waveform);			break;
-		case CHUNK_MUSIC:		LOAD_CHUNK(cart->bank.music.tracks.data); 		break;
-		case CHUNK_PATTERNS:	LOAD_CHUNK(cart->bank.music.patterns.data); 	break;
+		case CHUNK_TILES: 		LOAD_CHUNK(cart->banks[chunk.bank].tiles); 			break;
+		case CHUNK_SPRITES: 	LOAD_CHUNK(cart->banks[chunk.bank].sprites); 		break;
+		case CHUNK_MAP: 		LOAD_CHUNK(cart->banks[chunk.bank].map); 			break;
+		case CHUNK_CODE: 		LOAD_CHUNK(cart->banks[chunk.bank].code); 			break;
+		case CHUNK_SAMPLES: 	LOAD_CHUNK(cart->banks[chunk.bank].sfx.samples); 	break;
+		case CHUNK_WAVEFORM:	LOAD_CHUNK(cart->banks[chunk.bank].sfx.waveform); 	break;
+		case CHUNK_MUSIC:		LOAD_CHUNK(cart->banks[chunk.bank].music.tracks); 	break;
+		case CHUNK_PATTERNS:	LOAD_CHUNK(cart->banks[chunk.bank].music.patterns);	break;
 		case CHUNK_PALETTE:		
 			if(palette)
-				LOAD_CHUNK(cart->bank.palette); 					
+				LOAD_CHUNK(cart->palette);
 			break;
 		case CHUNK_COVER: 	
 			LOAD_CHUNK(cart->cover.data);
@@ -1635,11 +1662,11 @@ static s32 calcBufferSize(const void* buffer, s32 size)
 	return size;
 }
 
-static u8* saveFixedChunk(u8* buffer, ChunkType type, const void* from, s32 size)
+static u8* saveFixedChunk(u8* buffer, ChunkType type, const void* from, s32 size, s32 bank)
 {
 	if(size)
 	{
-		Chunk chunk = {type, size};
+		Chunk chunk = {.type = type, .bank = bank, .size = size, .temp = 0};
 		memcpy(buffer, &chunk, sizeof(Chunk));
 		buffer += sizeof(Chunk);
 		memcpy(buffer, from, size);
@@ -1649,30 +1676,33 @@ static u8* saveFixedChunk(u8* buffer, ChunkType type, const void* from, s32 size
 	return buffer;
 }
 
-static u8* saveChunk(u8* buffer, ChunkType type, const void* from, s32 size)
+static u8* saveChunk(u8* buffer, ChunkType type, const void* from, s32 size, s32 bank)
 {
 	s32 chunkSize = calcBufferSize(from, size);
 
-	return saveFixedChunk(buffer, type, from, chunkSize);
+	return saveFixedChunk(buffer, type, from, chunkSize, bank);
 }
 
 static s32 api_save(const tic_cartridge* cart, u8* buffer)
 {
 	u8* start = buffer;
 
-	#define SAVE_CHUNK(id, from) saveChunk(buffer, id, &from, sizeof(from))
+	#define SAVE_CHUNK(ID, FROM, BANK) saveChunk(buffer, ID, &FROM, sizeof(FROM), BANK)
 
-	buffer = SAVE_CHUNK(CHUNK_TILES, 	cart->bank.tiles);
-	buffer = SAVE_CHUNK(CHUNK_SPRITES, 	cart->bank.sprites);
-	buffer = SAVE_CHUNK(CHUNK_MAP, 		cart->bank.map);
-	buffer = SAVE_CHUNK(CHUNK_CODE, 	cart->bank.code);
-	buffer = SAVE_CHUNK(CHUNK_SOUND, 	cart->bank.sfx.data);
-	buffer = SAVE_CHUNK(CHUNK_WAVEFORM, cart->bank.sfx.waveform);
-	buffer = SAVE_CHUNK(CHUNK_PATTERNS, cart->bank.music.patterns.data);
-	buffer = SAVE_CHUNK(CHUNK_MUSIC, 	cart->bank.music.tracks.data);
-	buffer = SAVE_CHUNK(CHUNK_PALETTE, 	cart->bank.palette);
+	for(s32 i = 0; i < TIC_BANKS; i++)
+	{
+		buffer = SAVE_CHUNK(CHUNK_TILES, 	cart->banks[i].tiles, 			i);
+		buffer = SAVE_CHUNK(CHUNK_SPRITES, 	cart->banks[i].sprites, 		i);
+		buffer = SAVE_CHUNK(CHUNK_MAP, 		cart->banks[i].map, 			i);
+		buffer = SAVE_CHUNK(CHUNK_CODE, 	cart->banks[i].code, 			i);
+		buffer = SAVE_CHUNK(CHUNK_SAMPLES, 	cart->banks[i].sfx.samples, 	i);
+		buffer = SAVE_CHUNK(CHUNK_WAVEFORM, cart->banks[i].sfx.waveform, 	i);
+		buffer = SAVE_CHUNK(CHUNK_PATTERNS, cart->banks[i].music.patterns, 	i);
+		buffer = SAVE_CHUNK(CHUNK_MUSIC, 	cart->banks[i].music.tracks, 	i);
+	}
 
-	buffer = saveFixedChunk(buffer, CHUNK_COVER, cart->cover.data, cart->cover.size);
+	buffer = SAVE_CHUNK(CHUNK_PALETTE, 	cart->palette, 0);
+	buffer = saveFixedChunk(buffer, CHUNK_COVER, cart->cover.data, cart->cover.size, 0);
 
 	#undef SAVE_CHUNK
 
