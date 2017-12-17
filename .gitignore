@@ -93,3 +93,4 @@ build/windows/zlib/Debug Pro/
 build/windows/zlib/Release Pro/
 build/windows/example/Release Pro/
 build/windows/example/Debug Pro/
+*.exe
