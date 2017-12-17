@@ -48,18 +48,6 @@
 static const char* ExeExt = ".exe";
 #endif
 
-// static struct
-// {
-// 	char prefix[32];
-// 	bool yes;
-// 	bool menu;
-// 	tic_cartridge file;
-// } embed =
-// {
-// 	.prefix = "C8B39163816B47209E721136D37B8031",
-// 	.yes = false,
-// };
-
 static const char DefaultLuaTicPath[] = TIC_LOCAL "default.tic";
 static const char DefaultMoonTicPath[] = TIC_LOCAL "default_moon.tic";
 static const char DefaultJSTicPath[] = TIC_LOCAL "default_js.tic";
@@ -2722,7 +2710,7 @@ static void tick(Console* console)
 			if(!console->skipStart)
 				console->showGameMenu = true;
 
-			// memcpy(&console->tic->cart, &embed.file, sizeof(tic_cartridge));
+			memcpy(&console->tic->cart, console->embed.file, sizeof(tic_cartridge));
 			setStudioMode(TIC_RUN_MODE);
 			console->embed.yes = false;
 			console->skipStart = false;
@@ -2968,7 +2956,7 @@ void initConsole(Console* console, tic_mem* tic, FileSystem* fs, Config* config,
 		{
 			.yes = false,
 			.menu = false,
-			.file = NULL,
+			.file = console->embed.file,
 		},
 		.inputPosition = 0,
 		.history = NULL,

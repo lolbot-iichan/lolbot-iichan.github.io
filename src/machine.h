@@ -92,8 +92,10 @@ typedef struct
 
 	void (*setpix)(tic_mem* memory, s32 x, s32 y, u8 color);
 	u8 (*getpix)(tic_mem* memory, s32 x, s32 y);
+	void (*drawhline)(tic_mem* memory, s32 xl, s32 xr, s32 y, u8 color);
 
-	bool synced;
+	u32 synced;
+
 	bool initialized;
 } MachineState;
 

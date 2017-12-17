@@ -832,12 +832,12 @@ static s32 bf_sync(bf_State* bf)
 	tic_mem* memory = (tic_mem*)getBfMachine(bf);
 
 	bool toCart = false;
-	s32 section = 0;
+	u32 mask = 0;
 	s32 bank = 0;
 
 	if(bf_gettop(bf) >= 1)
 	{
-        section = getBfNumber(bf, 1);
+        mask = getBfNumber(bf, 1);
 
 		if(bf_gettop(bf) >= 2)
 		{
@@ -852,11 +852,7 @@ static s32 bf_sync(bf_State* bf)
 
 	if(bank >= 0 && bank < TIC_BANKS)
 	{
-	    const char* sections[] = {NULL,"tiles","sprites","map","sfx","music","palette"};
-        if(section >= 0 && section < COUNT_OF(sections))
-    		memory->api.sync(memory, sections[section], bank, toCart);
-    	else
-		    bfL_error(bf, "sync() error, invalid section");
+		memory->api.sync(memory, mask, bank, toCart);
 	}
 	else
 		bfL_error(bf, "sync() error, invalid bank");
