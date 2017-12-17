@@ -1296,7 +1296,7 @@ s32 runBfCodeLoop(bf_State* bf, char* code, s32* idx)
 
 	if(code[i]=='[' && bf->data.items[bf->data.index]==0)
 	{
-		for(i=i;i<codelen;i++)
+		for(;i<codelen;i++)
 		{
 			if(code[i]=='[')
 				depth++;
@@ -1308,7 +1308,7 @@ s32 runBfCodeLoop(bf_State* bf, char* code, s32* idx)
 	}
 	else if(code[i]==']' && bf->data.items[bf->data.index]!=0)
 	{
-		for(i=i;i>=0;i--)
+		for(;i>=0;i--)
 		{
 			if(code[i]=='[')
 				depth++;
