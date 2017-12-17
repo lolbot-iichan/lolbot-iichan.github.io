@@ -151,7 +151,21 @@ DEMO_ASSETS= \
 	bin/assets/benchmark.tic.dat \
 	bin/assets/config.tic.dat
 
-all: run
+DEMOS_FOR_EXPORT= \
+	bin/html/bf_btnp.html \
+	bin/html/bf_circ.html \
+	bin/html/bf_coordinates.html \
+	bin/html/bf_demo.html \
+	bin/html/bf_exit.html \
+	bin/html/bf_font.html \
+	bin/html/bf_mouse2.html \
+	bin/html/bf_mset.html \
+	bin/html/bf_pmem.html \
+	bin/html/bf_scanline.html \
+	bin/html/bf_sfx.html \
+	bin/html/bf_time.html
+
+all: run html
 
 TIC80_H = include/tic80/tic80_types.h include/tic80/tic80.h include/tic80/tic80_config.h src/tic.h src/ticapi.h src/machine.h
 
@@ -299,6 +313,14 @@ mingw-pro:
 	$(eval OPT += $(OPT_PRO))
 	make mingw OPT="$(OPT)"
 
+bin/html/%.html: demos/%.tic $(TIC2HTML)
+	$(TIC2HTML) build/html/index.html $< $@
+
+bin/html/tic.js: build/html/tic.js
+	cp build/html/tic.js bin/html/tic.js
+	
+html: $(DEMOS_FOR_EXPORT) bin/html/tic.js
+
 run: mingw-pro
 	$(MINGW_OUTPUT)
 
@@ -341,6 +363,7 @@ bin/res.o: lib/mingw/res.rc lib/mingw/icon.ico
 	windres $< $@
 
 BIN2TXT= tools/bin2txt/bin2txt
+TIC2HTML= tools/tic2html/tic2html
 
 bin/html.o: src/html.c build/html/index.html build/html/tic.js
 	$(BIN2TXT) build/html/index.html bin/assets/index.html.dat -z
