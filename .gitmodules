@@ -1,3 +1,6 @@
 [submodule "chocomilk"]
 	path = chocomilk
 	url = https://github.com/lolbot-iichan/chocomilk.git
+[submodule "TIC-80"]
+	path = TIC-80
+	url = https://github.com/lolbot-iichan/TIC-80
